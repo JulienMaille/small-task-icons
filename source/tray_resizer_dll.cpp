@@ -43,6 +43,7 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "runtimeobject.lib")
+#pragma comment(lib, "user32.lib")
 
 using namespace winrt::Windows::UI::Xaml;
 
