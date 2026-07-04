@@ -118,10 +118,13 @@ static void Setup() {
     // Try to find IconView::IconView in SystemTray.dll
     // The undecorated C++ name expected by Windhawk
     const char* names[] = {
-        // Full undecorated names
+        // Full undecorated names (what Windhawk uses for SymFromName)
         "public: __cdecl winrt::SystemTray::implementation::IconView::IconView(void)",
+        "winrt::SystemTray::implementation::IconView::IconView",
+        "IconView::IconView",
         // Decorated names (MSVC mangling)
         "??0IconView@implementation@SystemTray@winrt@@QEAA@XZ",
+        "??0?$IconView@V?$IconData@V?$NotifyIconData@V?$BasicIconData@UTrayIconData@SystemTray@winrt@@@SystemTray@winrt@@@SystemTray@winrt@@@SystemTray@winrt@@@implementation@SystemTray@winrt@@QEAA@XZ",
         nullptr
     };
     
