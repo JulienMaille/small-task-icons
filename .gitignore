@@ -3,6 +3,7 @@ source/*.obj
 source/*.exe
 source/*.dll
 source/*.lib
+!source/libMinHook.x64.lib
 source/*.exp
 source/*.pdb
 source/*.ilk
