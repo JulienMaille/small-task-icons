@@ -31,10 +31,12 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Build DLL
+    - name: Set up MSVC compiler
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Build DLL tray_resizer_dll.dll
       shell: cmd
       run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
         cd /d "%GITHUB_WORKSPACE%\source"
         cl /EHsc /MD /LD /std:c++20 /Zc:preprocessor /nologo ^
             tray_resizer_dll.cpp ^
@@ -42,7 +44,7 @@ jobs:
             /I"%WindowsSdkDir%Include\%WindowsSDKVersion%\cppwinrt" ^
             /link windowsapp.lib ole32.lib oleaut32.lib runtimeobject.lib
 
-    - name: Build injector
+    - name: Build injector tray_resizer.exe
       shell: cmd
       run: |
         cd /d "%GITHUB_WORKSPACE%\source"
