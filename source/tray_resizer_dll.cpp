@@ -317,6 +317,8 @@ void ApplyStyles(int w, int rows) {
 // we listen for UI automation events. When the tray area creates
 // new child elements, we reapply styles immediately.
 
+static std::atomic<bool> g_unloading{false};
+static UINT_PTR g_timerId = 0;
 static HWINEVENTHOOK g_eventHook = nullptr;
 
 static void CALLBACK WinEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd,
@@ -343,9 +345,6 @@ static void CALLBACK WinEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd,
 // ╔══════════════════════════════════════════════════════════╗
 // ║              THREAD + TIMER                             ║
 // ╚══════════════════════════════════════════════════════════╝
-
-static std::atomic<bool> g_unloading{false};
-static UINT_PTR g_timerId = 0;
 
 static VOID CALLBACK OnTimer(HWND, UINT, UINT_PTR id, DWORD) {
     if (g_unloading) { KillTimer(nullptr, id); return; }
