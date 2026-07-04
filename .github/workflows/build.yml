@@ -34,7 +34,7 @@ jobs:
     - name: Set up MSVC compiler
       uses: ilammy/msvc-dev-cmd@v1
 
-    - name: Build DLL tray_resizer_dll.dll
+    - name: Build DLL
       shell: cmd
       run: |
         cd /d "%GITHUB_WORKSPACE%\source"
@@ -44,11 +44,17 @@ jobs:
             /I"%WindowsSdkDir%Include\%WindowsSDKVersion%\cppwinrt" ^
             /link windowsapp.lib ole32.lib oleaut32.lib runtimeobject.lib
 
-    - name: Build injector tray_resizer.exe
+    - name: Build injector
       shell: cmd
       run: |
         cd /d "%GITHUB_WORKSPACE%\source"
         "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /platform:x64 /nologo /out:tray_resizer.exe tray_resizer.cs
+
+    - name: Build unloader
+      shell: cmd
+      run: |
+        cd /d "%GITHUB_WORKSPACE%\source"
+        "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /platform:x64 /nologo /out:tray_unloader.exe tray_unloader.cs
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -57,6 +63,7 @@ jobs:
         path: |
           source/tray_resizer_dll.dll
           source/tray_resizer.exe
+          source/tray_unloader.exe
         if-no-files-found: error
 
     - name: Create Release (on tag push)
@@ -66,6 +73,7 @@ jobs:
         files: |
           source/tray_resizer_dll.dll
           source/tray_resizer.exe
+          source/tray_unloader.exe
         name: Release ${{ github.ref_name }}
         draft: false
         prerelease: false
