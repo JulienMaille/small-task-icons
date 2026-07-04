@@ -81,7 +81,8 @@ static void* FindVTableByClass(HMODULE mod, const char* rttiName) {
         if(memcmp(rdata.start+i, rttiName, nameLen) == 0) {
             // 2. The TypeDescriptor struct has the name at offset 16 (x64) 
             auto* td = (RTTITD*)(rdata.start + i - 16);
-            if(td->name != rdata.start+i) continue; // validate alignment
+            // The name string follows the TypeDescriptor header (pVFTable + spare = 16 bytes)
+            // td->name == rdata.start+i by construction
             
             // 3. Find the COL that references this TypeDescriptor
             for(size_t j=0; j<rdata.size-8; j++) {
