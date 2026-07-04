@@ -29,14 +29,15 @@
 #include <atomic>
 #include <cstdint>
 
+// Fix macro conflict between Windows SDK and WinRT XAML headers
+// Must be before WinRT includes!
+#undef GetCurrentTime
+
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.UI.Xaml.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/base.h>
-
-// Fix macro conflict between Windows headers and XAML
-#undef GetCurrentTime
 
 #pragma comment(lib, "windowsapp.lib")
 #pragma comment(lib, "ole32.lib")
