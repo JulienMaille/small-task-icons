@@ -1,4 +1,4 @@
-// tray_resizer_dll.cpp — Timer + window property enumeration (simplified)
+// tray_resizer_dll.cpp — window property enumeration, final fix
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -43,41 +43,42 @@ static void SOV(FrameworkElement r){Controls::WrapGrid wg=nullptr;auto c=r;if((c
 static void ApplyFromRoot(XamlRoot rt,int w,int r){auto co=rt.Content().try_as<FrameworkElement>();if(!co)return;auto f=FC(co,L"SystemTray.SystemTrayFrame");if(!f)return;auto g=FN(f,L"SystemTrayFrameGrid");if(!g)return;if(auto a=FN(g,L"NotificationAreaIcons"))SNA(a,r,w);if(auto b=FN(g,L"ControlCenterButton"))SCC(b,w);for(auto n:{L"NotifyIconStack",L"MainStack",L"NonActivatableStack"})if(auto c=FN(g,n))SS(n,c,w);if(auto ov=FC(g,L"Windows.UI.Xaml.Controls.Grid"))SOV(ov);}
 
 // ╔══════════════════════════════════════════════════════════╗
-// ║  Window property enumeration for XamlRoot               ║
+// ║  Window property enumeration — NO __try in callback     ║
 // ╚══════════════════════════════════════════════════════════╝
-// Callback for EnumPropsEx. WinRT objects are declared OUTSIDE __try
+// Helper: tries QI with SEH protection (SEPARATE function to avoid __try/C++ conflict)
+static bool TryGetFE(IUnknown* unk, FrameworkElement& fe) {
+    __try {
+        unk->AddRef(); unk->Release();
+    } __except(EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return SUCCEEDED(unk->QueryInterface(winrt::guid_of<FrameworkElement>(), winrt::put_abi(fe))) && fe;
+}
+
+// EnumPropsEx callback — no WinRT locals, no __try, explicit CALLBACK cast
 static BOOL CALLBACK PropEnumCB(HWND, LPCWSTR, HANDLE hData, ULONG_PTR lParam) {
-    XamlRoot* pResult = (XamlRoot*)lParam;
     if (!hData || hData == INVALID_HANDLE_VALUE) return TRUE;
+    XamlRoot& result = *(XamlRoot*)lParam;
     IUnknown* unk = (IUnknown*)hData;
-    // Quick validation
-    __try { unk->AddRef(); unk->Release(); } __except(EXCEPTION_EXECUTE_HANDLER) { return TRUE; }
-    // Try QI for FrameworkElement (WinRT objects OUTSIDE __try)
     FrameworkElement fe = nullptr;
-    HRESULT hr = unk->QueryInterface(winrt::guid_of<FrameworkElement>(), winrt::put_abi(fe));
-    if (SUCCEEDED(hr) && fe) {
-        *pResult = fe.XamlRoot();
-        if (*pResult) return FALSE; // Found!
+    if (TryGetFE(unk, fe)) {
+        result = fe.XamlRoot();
+        return result ? FALSE : TRUE;
     }
     return TRUE;
 }
 
 static XamlRoot FindXamlRoot() {
-    // Find taskbar window
     HWND hTray = nullptr;
     EnumWindows([](HWND h, LPARAM l)->BOOL{DWORD p;WCHAR c[32];return(GetWindowThreadProcessId(h,&p)&&p==GetCurrentProcessId()&&GetClassNameW(h,c,32)&&_wcsicmp(c,L"Shell_TrayWnd")==0)?(*(HWND*)l=h,FALSE):TRUE;},(LPARAM)&hTray);
     if(!hTray) return nullptr;
-
-    // Enumerate children for XAML bridge windows
     XamlRoot result = nullptr;
     EnumChildWindows(hTray, [](HWND h, LPARAM l)->BOOL{
         WCHAR c[256]; GetClassNameW(h,c,256);
         if(!wcsstr(c,L"DesktopWindowContentBridge")&&!wcsstr(c,L"Desktop")) return TRUE;
-        // Check window properties for DesktopWindowXamlSource
-        if (EnumPropsEx(h, PropEnumCB, l)) return TRUE;
+        EnumPropsEx(h, (PROPENUMPROCEXW)PropEnumCB, l);
         return *(XamlRoot*)l ? FALSE : TRUE;
     }, (LPARAM)&result);
-
     return result;
 }
 
