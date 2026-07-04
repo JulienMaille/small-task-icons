@@ -1,0 +1,74 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      iconSize:
+        description: 'Icon width in pixels (default: 24)'
+        required: false
+        default: '24'
+      iconRows:
+        description: 'Number of rows (1 = single row)'
+        required: false
+        default: '1'
+
+env:
+  ICON_SIZE: ${{ github.event.inputs.iconSize || '24' }}
+  ICON_ROWS: ${{ github.event.inputs.iconRows || '1' }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up MSVC
+      uses: microsoft/setup-msbuild@v2
+      with:
+        vs-version: '17'
+
+    - name: Build DLL
+      shell: cmd
+      run: |
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+        cd /d "%GITHUB_WORKSPACE%\source"
+        cl /EHsc /MD /LD /std:c++20 /Zc:preprocessor /nologo ^
+            tray_resizer_dll.cpp ^
+            /Fe:tray_resizer_dll.dll ^
+            /I"%WindowsSdkDir%Include\%WindowsSDKVersion%\cppwinrt" ^
+            /link windowsapp.lib ole32.lib oleaut32.lib runtimeobject.lib
+
+    - name: Build injector
+      shell: cmd
+      run: |
+        cd /d "%GITHUB_WORKSPACE%\source"
+        "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /platform:x64 /nologo /out:tray_resizer.exe tray_resizer.cs
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: tray-resizer-${{ env.ICON_SIZE }}px
+        path: |
+          source/tray_resizer_dll.dll
+          source/tray_resizer.exe
+        if-no-files-found: error
+
+    - name: Create Release (on tag push)
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          source/tray_resizer_dll.dll
+          source/tray_resizer.exe
+        name: Release ${{ github.ref_name }}
+        draft: false
+        prerelease: false
