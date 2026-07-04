@@ -15,8 +15,13 @@
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#define UNICODE
+#define _UNICODE
+
 #include <windows.h>
 #include <psapi.h>
+#include <combaseapi.h>  // CoInitializeEx, CoUninitialize
+#include <unknwn.h>      // IUnknown
 #include <vector>
 #include <list>
 #include <cmath>
@@ -29,6 +34,9 @@
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/base.h>
+
+// Fix macro conflict between Windows headers and XAML
+#undef GetCurrentTime
 
 #pragma comment(lib, "windowsapp.lib")
 #pragma comment(lib, "ole32.lib")
@@ -88,7 +96,6 @@ static uint8_t* ScanModule(HMODULE mod, const Pattern& p) {
 // ║              TASKBAR INTERNAL POINTERS                  ║
 // ╚══════════════════════════════════════════════════════════╝
 
-// Function pointers resolved from taskbar.dll at runtime
 using GetTaskbarHostFn  = void*(WINAPI*)(void* pThis, void** out);
 using DecrefFn          = void(WINAPI*)(void* pThis);
 
@@ -101,9 +108,9 @@ static void*            g_vtable_ITaskList  = nullptr;
 static bool InitTaskbarPointers() {
     if (g_getTaskbarHost) return true;
 
-    g_taskbarMod = GetModuleHandle(L"taskbar.dll");
+    g_taskbarMod = GetModuleHandleW(L"taskbar.dll");
     if (!g_taskbarMod)
-        g_taskbarMod = LoadLibraryEx(L"taskbar.dll", nullptr,
+        g_taskbarMod = LoadLibraryExW(L"taskbar.dll", nullptr,
                                      LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!g_taskbarMod) return false;
 
@@ -126,12 +133,8 @@ static bool InitTaskbarPointers() {
 
     // ── Step 1: Find TaskbarHost::FrameHeight ──
     // Pattern: sub rsp,28h; add rcx,XX; ...
-    //          48 83 EC 28  48 83 C1 XX
     Pattern fh1 = MakePattern({0x48,0x83,0xEC,0x28,0x48,0x83,0xC1,0xAA});
     Pattern fh2 = MakePattern({0x48,0x83,0xEC,0x28,0x48,0x8D,0x41,0xAA});
-    Pattern fh3 = MakePattern({0x48,0x83,0xEC,0x28,0x48,0x8D,0x0D,0xAA,0xAA,0xAA,0xAA});
-    
-    // Also try: sub rsp,38h
     Pattern fh4 = MakePattern({0x48,0x83,0xEC,0x38,0x48,0x83,0xC1,0xAA});
 
     auto* fh = Scan(textStart, textSize, fh1);
@@ -143,92 +146,49 @@ static bool InitTaskbarPointers() {
     if (fh) elementOffset = fh[7];
 
     // ── Step 2: Find CTaskBand::GetTaskbarHost ──
-    // Look for a function that accesses `this + elementOffset`
-    // (i.e. the TaskbarHost pointer inside CTaskBand)
-    //
-    // Common pattern: 
-    //   48 89 5C 24 08     mov [rsp+8],rbx
-    //   48 89 74 24 10     mov [rsp+10],rsi
-    //   57                 push rdi
-    //   48 83 EC 20        sub rsp,20h
-    //   48 8B D9           mov rbx,rcx         <- 'this'
-    //   ...
-    //   48 8D 4B XX        lea rcx,[rbx+XX]    <- XX = elementOffset
-
     std::vector<Pattern> patterns = {
-        // Pattern A: standard prologue with rbx
         MakePattern({0x48,0x89,0x5C,0x24,0xAA, 0x57, 0x48,0x83,0xEC,0x20, 0x48,0x8B,0xD9}),
-        // Pattern B: longer prologue
         MakePattern({0x48,0x89,0x5C,0x24,0xAA, 0x48,0x89,0x74,0x24,0xAA, 0x57, 0x48,0x83,0xEC,0x20, 0x48,0x8B,0xD9}),
-        // Pattern C: even longer prologue 
         MakePattern({0x48,0x89,0x5C,0x24,0xAA, 0x48,0x89,0x6C,0x24,0xAA, 0x48,0x89,0x74,0x24,0xAA, 0x57, 0x48,0x83,0xEC,0x20, 0x48,0x8B,0xD9}),
-        // Pattern D: mov rdi,rcx variant
         MakePattern({0x48,0x89,0x5C,0x24,0xAA, 0x48,0x89,0x74,0x24,0xAA, 0x57, 0x48,0x83,0xEC,0x20, 0x48,0x8B,0xF9}),
     };
 
     for (auto& pat : patterns) {
         auto* found = Scan(textStart, textSize, pat);
         if (!found) continue;
-
-        // Verify by checking for the elementOffset reference within 80 bytes
         bool hasRef = false;
         for (int j = 0; j < 80 && (found + j) < (textStart + textSize - 3); j++) {
-            // lea rcx,[rbx+XX]   : 48 8D 4B XX
-            // lea rcx,[rdi+XX]   : 48 8D 4F XX
             if (found[j] == 0x48 && found[j+1] == 0x8D &&
                 (found[j+2] == 0x4B || found[j+2] == 0x4F) &&
-                found[j+3] == elementOffset) {
-                hasRef = true;
-                break;
-            }
-            // lea rax,[rcx+XX]   : 48 8D 41 XX
+                found[j+3] == elementOffset) { hasRef = true; break; }
             if (found[j] == 0x48 && found[j+1] == 0x8D && found[j+2] == 0x41 &&
-                found[j+3] == elementOffset) {
-                hasRef = true;
-                break;
-            }
+                found[j+3] == elementOffset) { hasRef = true; break; }
         }
-        if (hasRef) {
-            g_getTaskbarHost = (GetTaskbarHostFn)found;
-            break;
-        }
+        if (hasRef) { g_getTaskbarHost = (GetTaskbarHostFn)found; break; }
     }
 
     // ── Step 3: Find std::_Ref_count_base::_Decref ──
-    // Pattern: lock; dec [rcx+4]; jne XX; ...
-    //          F0 FF 41 04
     Pattern dec1 = MakePattern({0xF0,0xFF,0x41,0x04});
     Pattern dec2 = MakePattern({0xF0,0xFF,0x49,0x04});
-    
     auto* decref = Scan(textStart, textSize, dec1);
     if (!decref) decref = Scan(textStart, textSize, dec2);
-
     if (decref) {
-        // Walk backward to find function start
         auto* func = decref;
-        auto* sectionEnd = textStart + textSize;
-        for (int i = 0; i < 80 && func > textStart; i++) {
+        for (int i = 0; i < 80 && func > textStart; i--) {
             func--;
-            // Check for common function prologue indicators
             if (func[0] == 0x48 && func[1] == 0x89 && func[2] == 0x5C && func[3] == 0x24) {
-                g_decref = (DecrefFn)func;
-                break;
+                g_decref = (DecrefFn)func; break;
             }
             if (func[0] == 0x48 && func[1] == 0x83 && func[2] == 0xEC && func[3] <= 0x40) {
-                if (func >= textStart) {
-                    g_decref = (DecrefFn)func;
-                    break;
-                }
+                if (func >= textStart) { g_decref = (DecrefFn)func; break; }
             }
         }
-        if (!g_decref) g_decref = (DecrefFn)decref; // fallback
+        if (!g_decref) g_decref = (DecrefFn)decref;
     }
 
-    // ── Step 4: Find the CTaskBand vtable for ITaskListWndSite ──
+    // ── Step 4: Find ITaskListWndSite vtable ──
     if (g_getTaskbarHost) {
         auto fnAddr = (const uint8_t*)g_getTaskbarHost;
-
-        // Locate .rdata section
         sec = IMAGE_FIRST_SECTION(nt);
         const uint8_t* rdataStart = nullptr;
         size_t rdataSize = 0;
@@ -239,30 +199,18 @@ static bool InitTaskbarPointers() {
                 break;
             }
         }
-
         if (rdataStart) {
-            // Search for GetTaskbarHost function pointer in .rdata
             for (size_t i = 0; i < rdataSize - 8; i++) {
                 if (memcmp(rdataStart + i, &fnAddr, 8) == 0) {
                     uint8_t* entry = const_cast<uint8_t*>(rdataStart + i);
-
-                    // Walk back to find vtable start
-                    // vtable layout: [RTTI_ptr][fn1][fn2]...[fnN]
-                    // We found fn at some index. Walk back to find the RTTI pointer.
                     for (int back = 0; back < 25; back++) {
                         auto* cand = entry - (back + 1) * 8;
                         if (cand < rdataStart) break;
-                        
                         auto* rttiPtr = *(uint8_t**)(cand);
-                        // Verify the RTTI pointer is within the module
                         if (rttiPtr >= base && rttiPtr < base + nt->OptionalHeader.SizeOfImage) {
-                            g_vtable_ITaskList = cand + 8; // first vtable entry
-                            break;
+                            g_vtable_ITaskList = cand + 8; break;
                         }
                     }
-
-                    // If RTTI approach failed, just use the address and search 
-                    // for the vtable in the CTaskBand object at runtime
                     break;
                 }
             }
@@ -276,16 +224,12 @@ static bool InitTaskbarPointers() {
 // ║              XAML HELPER & STYLE FUNCTIONS              ║
 // ╚══════════════════════════════════════════════════════════╝
 
-// These functions are adapted from the Windhawk mod by m417z.
-// They walk the Windows 11 taskbar's XAML visual tree and
-// modify layout properties of tray icon elements.
-
 static HWND FindTaskbarWnd() {
     HWND result = nullptr;
     EnumWindows([](HWND hwnd, LPARAM lp) -> BOOL {
         DWORD pid; WCHAR cls[32];
         if (GetWindowThreadProcessId(hwnd, &pid) && pid == GetCurrentProcessId() &&
-            GetClassName(hwnd, cls, 32) && _wcsicmp(cls, L"Shell_TrayWnd") == 0) {
+            GetClassNameW(hwnd, cls, 32) && _wcsicmp(cls, L"Shell_TrayWnd") == 0) {
             *(HWND*)lp = hwnd; return FALSE;
         }
         return TRUE;
@@ -293,7 +237,7 @@ static HWND FindTaskbarWnd() {
     return result;
 }
 
-static FrameworkElement EnumChildren(FrameworkElement parent, 
+static FrameworkElement EnumChildren(FrameworkElement parent,
                                       std::function<bool(FrameworkElement)> cb) {
     int n = Media::VisualTreeHelper::GetChildrenCount(parent);
     for (int i = 0; i < n; i++) {
@@ -309,15 +253,6 @@ static FrameworkElement FindChildByName(FrameworkElement el, PCWSTR name) {
 
 static FrameworkElement FindChildByClass(FrameworkElement el, PCWSTR cls) {
     return EnumChildren(el, [&](auto c) { return winrt::get_class_name(c) == cls; });
-}
-
-static bool IsChildOf(FrameworkElement el, PCWSTR name, bool byClass = false) {
-    for (auto p = el;;) {
-        p = Media::VisualTreeHelper::GetParent(p).try_as<FrameworkElement>();
-        if (!p) return false;
-        if (byClass ? (winrt::get_class_name(p) == name) : (p.Name() == name))
-            return true;
-    }
 }
 
 static void StyleNotifyIconView(FrameworkElement el, int w) {
@@ -488,13 +423,12 @@ static void StyleOverflow(FrameworkElement root) {
 static XamlRoot GetXamlRoot(HWND hTaskbar) {
     if (!InitTaskbarPointers()) return nullptr;
 
-    HWND hSwWnd = (HWND)GetProp(hTaskbar, L"TaskbandHWND");
+    HWND hSwWnd = (HWND)GetPropW(hTaskbar, L"TaskbandHWND");
     if (!hSwWnd) return nullptr;
 
-    auto* taskBand = (void*)GetWindowLongPtr(hSwWnd, 0);
+    auto* taskBand = (void*)GetWindowLongPtrW(hSwWnd, 0);
     if (!taskBand) return nullptr;
 
-    // Find the ITaskListWndSite vtable pointer in the CTaskBand object
     void* itfPtr = taskBand;
     bool found = false;
 
@@ -508,17 +442,12 @@ static XamlRoot GetXamlRoot(HWND hTaskbar) {
         }
     }
 
-    // Fallback: scan vtables for the function pointer
     if (!found && g_getTaskbarHost) {
         for (int i = 0; i < 25; i++) {
             auto* vtable = *(void***)((void**)taskBand + i);
             if (!vtable) continue;
-            // Check if this is a likely vtable (within taskbar.dll)
-            auto* base = (const uint8_t*)g_taskbarMod;
-            if ((uint8_t*)vtable < base || 
-                (uint8_t*)vtable > base + 0x200000) continue;
-            
-            // Search first 30 entries for GetTaskbarHost
+            auto* b = (const uint8_t*)g_taskbarMod;
+            if ((uint8_t*)vtable < b || (uint8_t*)vtable > b + 0x200000) continue;
             for (int j = 0; j < 30; j++) {
                 if (vtable[j] == (void*)g_getTaskbarHost) {
                     itfPtr = (void**)taskBand + i;
@@ -536,7 +465,6 @@ static XamlRoot GetXamlRoot(HWND hTaskbar) {
     g_getTaskbarHost(itfPtr, sp);
     if (!sp[0]) return nullptr;
 
-    // Get element offset from FrameHeight
     size_t offset = 0x48;
     if (g_frameHeight) offset = ((uint8_t*)g_frameHeight)[7];
 
@@ -549,7 +477,7 @@ static XamlRoot GetXamlRoot(HWND hTaskbar) {
     FrameworkElement taskbarElement = nullptr;
     elementUnk->QueryInterface(winrt::guid_of<FrameworkElement>(),
                                 winrt::put_abi(taskbarElement));
-    
+
     XamlRoot result = nullptr;
     if (taskbarElement) result = taskbarElement.XamlRoot();
 
@@ -576,22 +504,16 @@ static void ApplyStyles(int width, int rows) {
     auto grid = FindChildByName(frame, L"SystemTrayFrameGrid");
     if (!grid) return;
 
-    // Notification area
     if (auto area = FindChildByName(grid, L"NotificationAreaIcons"))
         StyleNotifyArea(area, rows, width);
 
-    // Control center
     if (auto btn = FindChildByName(grid, L"ControlCenterButton"))
         StyleControlCenter(btn, width);
 
-    // Icon stacks
     for (auto name : {L"NotifyIconStack", L"MainStack", L"NonActivatableStack"})
         if (auto c = FindChildByName(grid, name))
             StyleIconStack(name, c, width);
 
-    // Overflow (if open)
-    // Note: The overflow popup is handled separately when it opens.
-    // We apply styles here in case it was already open.
     if (auto overflow = FindChildByClass(grid, L"Windows.UI.Xaml.Controls.Grid"))
         StyleOverflow(overflow);
 }
@@ -610,15 +532,12 @@ static VOID CALLBACK OnTimer(HWND, UINT, UINT_PTR id, DWORD) {
 
 static DWORD WINAPI WorkerThread(LPVOID) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-
-    // Apply immediately
     ApplyStyles(Config::kIconWidth, Config::kIconRows);
 
-    // Reapply on a timer to catch new icons
     g_timerId = SetTimer(nullptr, 0, Config::kReapplyMs, OnTimer);
 
     MSG msg;
-    while (!g_unloading && GetMessage(&msg, nullptr, 0, 0)) {
+    while (!g_unloading && GetMessageW(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
@@ -640,7 +559,7 @@ BOOL APIENTRY DllMain(HMODULE hMod, DWORD reason, LPVOID) {
     } else if (reason == DLL_PROCESS_DETACH) {
         g_unloading = true;
         if (g_timerId) KillTimer(nullptr, g_timerId);
-        FreeLibrary(g_taskbarMod);
+        if (g_taskbarMod) FreeLibrary(g_taskbarMod);
     }
     return TRUE;
 }
