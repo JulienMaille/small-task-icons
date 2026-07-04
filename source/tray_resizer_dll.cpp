@@ -39,7 +39,7 @@ static HMODULE g_t=NULL; static GTH g_th=nullptr; static DEC g_dc=nullptr; stati
 
 static void* FindSym(const wchar_t* name, const char* decorated) {
     HANDLE hp=GetCurrentProcess();
-    SymSetOptions(SYMOPT_UNDNAME|SYMOPT_DEFERRED_LOADS|SYMOPT_LOAD_LINES|SYMOPT_LOAD_ANYWHERE);
+    SymSetOptions(SYMOPT_UNDNAME|SYMOPT_DEFERRED_LOADS|SYMOPT_LOAD_LINES);
 
     // Set symbol path to include Microsoft Symbol Server — same as Windhawk!
     // This enables downloading PDBs for system DLLs like taskbar.dll
